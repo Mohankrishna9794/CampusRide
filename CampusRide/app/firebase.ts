@@ -1,5 +1,11 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth';
+import {
+  initializeAuth,
+  getAuth,
+  browserLocalPersistence,
+  indexedDBLocalPersistence,
+  type Auth,
+} from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { Platform } from 'react-native';
 
@@ -14,15 +20,31 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
 
-// Keep the user logged in across refreshes (web stores the session in
-// IndexedDB/localStorage — the "cookie" that survives a reload).
-if (Platform.OS === 'web') {
-  setPersistence(auth, browserLocalPersistence).catch((e) =>
-    console.log('persistence error', e)
-  );
+// Keep the user logged in across refreshes / app restarts.
+// Persistence is platform-specific: the Firebase web SDK uses IndexedDB in the
+// browser, but on native (Expo Go / device) it defaults to IN-MEMORY storage,
+// which loses the session on every restart. We must wire AsyncStorage there.
+let auth: Auth;
+try {
+  if (Platform.OS === 'web') {
+    auth = initializeAuth(app, {
+      persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+    });
+  } else {
+    // require() (not import) so the web bundle never pulls RN-only modules.
+    // getReactNativePersistence only exists in firebase/auth's React Native build.
+    const { getReactNativePersistence } = require('firebase/auth');
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    auth = initializeAuth(app, {
+      persistence: getReactNativePersistence(AsyncStorage),
+    });
+  }
+} catch {
+  // initializeAuth throws "already-initialized" on hot-reload — reuse the instance.
+  auth = getAuth(app);
 }
 
+export { auth };
 export const db = getFirestore(app);
 export default app;
