@@ -1,12 +1,104 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
-  TouchableOpacity,
+  TouchableOpacity, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { auth } from './firebase';
+import { initialOf } from '../constants/avatars';
+import {
+  listenUserProfile, listenHostedRides, listenSentRequests,
+  UserProfile, RideRequest,
+} from '@/lib/rideService';
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [hostedRides, setHostedRides] = useState<any[]>([]);
+  const [joined, setJoined] = useState<RideRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setCurrentUser(u);
+      if (!u) { setLoading(false); router.replace('/login' as any); }
+    });
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const unsubProfile = listenUserProfile(currentUser.uid, (p) => { setProfile(p); setLoading(false); });
+    const unsubHosted = listenHostedRides(currentUser.uid, setHostedRides);
+    const unsubSent = listenSentRequests(currentUser.uid, (_map, reqs) =>
+      setJoined(reqs.filter(r => r.status === 'accepted')));
+    return () => { unsubProfile(); unsubHosted(); unsubSent(); };
+  }, [currentUser]);
+
+  const handleLogout = async () => {
+    try { await signOut(auth); } catch (e) { console.log('logout error', e); }
+    router.replace('/login' as any);
+  };
+
+  // ---- Derived, real values ----
+  const name = profile?.name || currentUser?.displayName || currentUser?.email?.split('@')[0] || 'Student';
+  const email = profile?.email || currentUser?.email || '—';
+  const dept = profile?.dept || 'Student';
+  const year = profile?.year ? `${profile.year} Year` : '—';
+  const subtitle = `${dept}${profile?.year ? ` • ${profile.year} Year` : ''}`;
+  const rating = (profile?.rating ?? 5).toFixed(1);
+
+  const ridesShared = hostedRides.length;
+  const ridesTaken = joined.length;
+  const co2Saved = (ridesShared + ridesTaken) * 2; // ~2kg saved per shared ride
+
+  // Vehicle info comes from the user's most recent hosted ride
+  const latestVehicle = hostedRides[0];
+  const vehicleType = latestVehicle?.vehicleType
+    ? (latestVehicle.vehicleType === 'car' ? 'Car' : 'Bike') : 'Not added';
+  const vehicleNumber = latestVehicle?.vehicleNumber || 'Not added';
+  const vehicleModel = latestVehicle?.vehicleModel || 'Not added';
+
+  const fmtDate = (iso?: string) => {
+    if (!iso) return '';
+    try { return new Date(iso).toLocaleDateString([], { day: 'numeric', month: 'short' }); }
+    catch { return ''; }
+  };
+
+  // Merge hosted + joined into one recent-rides feed
+  const recentRides = [
+    ...hostedRides.map(r => ({
+      from: r.from, to: r.to, time: r.time, createdAt: r.createdAt,
+      type: 'Hosted', color: '#1A56DB',
+    })),
+    ...joined.map(r => ({
+      from: r.rideFrom, to: r.rideTo, time: r.rideTime, createdAt: r.createdAt,
+      type: 'Joined', color: '#16A34A',
+    })),
+  ].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 6);
+
+  const personalInfo = [
+    { icon: '📧', label: 'Email', val: email },
+    { icon: '📱', label: 'Phone', val: profile?.phone || '—' },
+    { icon: '🎓', label: 'Department', val: dept },
+    { icon: '📅', label: 'Year', val: year },
+  ];
+
+  const vehicleInfo = [
+    { icon: '🏍️', label: 'Vehicle Type', val: vehicleType },
+    { icon: '🔢', label: 'Vehicle Number', val: vehicleNumber },
+    { icon: '🏎️', label: 'Vehicle Model', val: vehicleModel },
+  ];
+
+  if (loading) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#1A56DB" />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -16,12 +108,12 @@ export default function ProfileScreen() {
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <View style={styles.avatarBig}>
-          <Text style={styles.avatarBigText}>ME</Text>
+          <Text style={styles.avatarBigText}>{initialOf(name)}</Text>
         </View>
-        <Text style={styles.profileName}>Student Name</Text>
-        <Text style={styles.profileDept}>Computer Science • 3rd Year</Text>
+        <Text style={styles.profileName}>{name}</Text>
+        <Text style={styles.profileDept}>{subtitle}</Text>
         <View style={styles.ratingBadge}>
-          <Text style={styles.ratingText}>⭐ 4.8 Rating</Text>
+          <Text style={styles.ratingText}>⭐ {rating} Rating</Text>
         </View>
       </View>
 
@@ -30,9 +122,9 @@ export default function ProfileScreen() {
         {/* Stats */}
         <View style={styles.statsRow}>
           {[
-            { val: '12', label: 'Rides Shared', color: '#1A56DB' },
-            { val: '28', label: 'Rides Taken', color: '#2563EB' },
-            { val: '8kg', label: 'CO₂ Saved', color: '#16A34A' },
+            { val: String(ridesShared), label: 'Rides Shared', color: '#1A56DB' },
+            { val: String(ridesTaken), label: 'Rides Taken', color: '#2563EB' },
+            { val: `${co2Saved}kg`, label: 'CO₂ Saved', color: '#16A34A' },
           ].map((s, i) => (
             <View key={i} style={styles.statCard}>
               <Text style={[styles.statVal, { color: s.color }]}>{s.val}</Text>
@@ -44,13 +136,8 @@ export default function ProfileScreen() {
         {/* Personal Info */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>👤 Personal Info</Text>
-          {[
-            { icon: '📧', label: 'Email', val: 'student@college.edu' },
-            { icon: '📱', label: 'Phone', val: '+91 98765 43210' },
-            { icon: '🎓', label: 'Department', val: 'Computer Science' },
-            { icon: '📅', label: 'Year', val: '3rd Year' },
-          ].map((row, i) => (
-            <View key={i} style={[styles.infoRow, i === 3 && { borderBottomWidth: 0 }]}>
+          {personalInfo.map((row, i) => (
+            <View key={i} style={[styles.infoRow, i === personalInfo.length - 1 && { borderBottomWidth: 0 }]}>
               <View style={styles.infoLeft}>
                 <Text style={styles.infoIcon}>{row.icon}</Text>
                 <Text style={styles.infoLabel}>{row.label}</Text>
@@ -66,12 +153,8 @@ export default function ProfileScreen() {
         {/* Vehicle Info */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>🚘 Vehicle Info</Text>
-          {[
-            { icon: '🏍️', label: 'Vehicle Type', val: 'Bike' },
-            { icon: '🔢', label: 'Vehicle Number', val: 'TN01AB1234' },
-            { icon: '🏎️', label: 'Vehicle Model', val: 'Honda Activa' },
-          ].map((row, i) => (
-            <View key={i} style={[styles.infoRow, i === 2 && { borderBottomWidth: 0 }]}>
+          {vehicleInfo.map((row, i) => (
+            <View key={i} style={[styles.infoRow, i === vehicleInfo.length - 1 && { borderBottomWidth: 0 }]}>
               <View style={styles.infoLeft}>
                 <Text style={styles.infoIcon}>{row.icon}</Text>
                 <Text style={styles.infoLabel}>{row.label}</Text>
@@ -87,17 +170,15 @@ export default function ProfileScreen() {
         {/* Ride History */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>🕐 Recent Rides</Text>
-          {[
-            { from: 'Adyar Signal', to: 'College', time: 'Today 8:15 AM', type: 'Hosted', color: '#1A56DB' },
-            { from: 'Velachery', to: 'College', time: 'Yesterday 8:30 AM', type: 'Joined', color: '#16A34A' },
-            { from: 'Tambaram', to: 'College', time: 'Mon 7:55 AM', type: 'Joined', color: '#16A34A' },
-          ].map((ride, i) => (
-            <View key={i} style={[styles.rideHistoryRow, i === 2 && { borderBottomWidth: 0 }]}>
+          {recentRides.length === 0 ? (
+            <Text style={styles.emptyHistory}>No rides yet — host or join a ride to get started.</Text>
+          ) : recentRides.map((ride, i) => (
+            <View key={i} style={[styles.rideHistoryRow, i === recentRides.length - 1 && { borderBottomWidth: 0 }]}>
               <View style={styles.infoLeft}>
                 <View style={[styles.historyDot, { backgroundColor: ride.color }]} />
                 <View>
                   <Text style={styles.historyRoute}>{ride.from} → {ride.to}</Text>
-                  <Text style={styles.historyTime}>{ride.time}</Text>
+                  <Text style={styles.historyTime}>{fmtDate(ride.createdAt)} {ride.time}</Text>
                 </View>
               </View>
               <View style={[styles.historyBadge, { backgroundColor: ride.color + '18' }]}>
@@ -111,26 +192,27 @@ export default function ProfileScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>⚙️ Settings</Text>
           {[
-            { icon: '🔔', label: 'Notifications' },
-            { icon: '🔒', label: 'Change Password' },
-            { icon: '❓', label: 'Help & Support' },
-            { icon: 'ℹ️', label: 'About CampusRide' },
+            { icon: '🔔', label: 'Notifications', route: '/notifications' },
+            { icon: '🔒', label: 'Change Password', route: '/change-password' },
+            { icon: '❓', label: 'Help & Support', route: '/help-support' },
+            { icon: 'ℹ️', label: 'About CampusRide', route: '/about' },
           ].map((row, i) => (
-            <View key={i} style={[styles.infoRow, i === 3 && { borderBottomWidth: 0 }]}>
+            <TouchableOpacity
+              key={i}
+              style={[styles.infoRow, i === 3 && { borderBottomWidth: 0 }]}
+              onPress={() => router.push(row.route as any)}
+            >
               <View style={styles.infoLeft}>
                 <Text style={styles.infoIcon}>{row.icon}</Text>
                 <Text style={styles.infoLabel}>{row.label}</Text>
               </View>
               <Text style={styles.infoArrow}>›</Text>
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
 
         {/* Logout */}
-        <TouchableOpacity
-          style={styles.logoutBtn}
-          onPress={() => router.replace('/login' as any)}
-        >
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
           <Text style={styles.logoutText}>🚪 Logout</Text>
         </TouchableOpacity>
 
@@ -189,6 +271,7 @@ const styles = StyleSheet.create({
   historyTime: { fontSize: 11, color: '#888', marginTop: 2 },
   historyBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10 },
   historyBadgeText: { fontSize: 11, fontWeight: '700' },
+  emptyHistory: { fontSize: 12, color: '#888', textAlign: 'center', paddingVertical: 10 },
   logoutBtn: { backgroundColor: '#FEE2E2', borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginBottom: 20 },
   logoutText: { fontSize: 14, fontWeight: '800', color: '#EF4444' },
   bottomNav: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#ffffff', borderTopWidth: 1, borderTopColor: '#E8EEFF', flexDirection: 'row', paddingBottom: 20, paddingTop: 10, elevation: 10 },

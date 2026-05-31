@@ -1,30 +1,72 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
-  TouchableOpacity, TextInput,
+  TouchableOpacity, TextInput, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-
-const rides = [
-  { id:'1', host:'Arjun M.', avatar:'A', from:'Adyar Signal', to:'College Main Gate', time:'8:15 AM', vehicle:'Honda Activa', type:'bike', seats:1, distance:'4.2 km', dept:'CSE • 3rd Year', fuel:'₹20', color:'#1A56DB' },
-  { id:'2', host:'Priya S.', avatar:'P', from:'Velachery Bus Stop', to:'College Main Gate', time:'8:30 AM', vehicle:'Swift Dzire', type:'car', seats:3, distance:'6.8 km', dept:'AIML • 2nd Year', fuel:'₹30', color:'#2563EB' },
-  { id:'3', host:'Rahul K.', avatar:'R', from:'Tambaram Station', to:'College Side Gate', time:'7:55 AM', vehicle:'Pulsar 150', type:'bike', seats:1, distance:'9.1 km', dept:'ECE • 4th Year', fuel:'₹25', color:'#1D4ED8' },
-  { id:'4', host:'Sneha T.', avatar:'S', from:'Pallavaram', to:'College Main Gate', time:'8:45 AM', vehicle:'i10 Grand', type:'car', seats:2, distance:'7.3 km', dept:'IT • 3rd Year', fuel:'₹25', color:'#1A56DB' },
-  { id:'5', host:'Karthik R.', avatar:'K', from:'Guindy Station', to:'College Main Gate', time:'8:00 AM', vehicle:'Activa 6G', type:'bike', seats:1, distance:'5.5 km', dept:'MECH • 2nd Year', fuel:'₹15', color:'#2563EB' },
-  { id:'6', host:'Divya M.', avatar:'D', from:'Chromepet Signal', to:'College Main Gate', time:'8:20 AM', vehicle:'WagonR', type:'car', seats:3, distance:'8.2 km', dept:'EEE • 3rd Year', fuel:'₹30', color:'#1D4ED8' },
-];
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth, db } from './firebase';
+import { sendRideRequest, listenSentRequests } from '@/lib/rideService';
 
 export default function FindScreen() {
   const router = useRouter();
+  const [rides, setRides] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
-  const [requested, setRequested] = useState<{[key:string]:boolean}>({});
+  const [requestStatus, setRequestStatus] = useState<{[key:string]: string}>({});
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  // Track auth state
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setCurrentUser(u));
+    return () => unsub();
+  }, []);
+
+  // Load rides from Firestore in real time
+  useEffect(() => {
+    const q = query(
+      collection(db, 'rides'),
+      where('status', '==', 'active')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const ridesData = snapshot.docs.map(d => ({
+        id: d.id,
+        ...d.data()
+      }));
+      setRides(ridesData);
+      setLoading(false);
+    }, (error) => {
+      console.log('Error loading rides:', error);
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Track which rides the current user has already requested (rideId -> status)
+  useEffect(() => {
+    if (!currentUser) { setRequestStatus({}); return; }
+    const unsub = listenSentRequests(currentUser.uid, (map) => setRequestStatus(map));
+    return () => unsub();
+  }, [currentUser]);
+
+  const handleRequest = async (ride: any) => {
+    if (!currentUser) { router.push('/login' as any); return; }
+    if (ride.hostId === currentUser.uid) return; // can't request your own ride
+    try {
+      await sendRideRequest(ride);
+      setRequestStatus(s => ({ ...s, [ride.id]: 'pending' }));
+    } catch (e) {
+      console.log('Error sending request:', e);
+    }
+  };
 
   const filtered = rides.filter(r => {
-    const matchFilter = filter === 'all' || r.type === filter;
+    const matchFilter = filter === 'all' || r.vehicleType === filter;
     const matchSearch = !search ||
-      r.from.toLowerCase().includes(search.toLowerCase()) ||
-      r.host.toLowerCase().includes(search.toLowerCase());
+      (r.from || '').toLowerCase().includes(search.toLowerCase()) ||
+      (r.hostName || '').toLowerCase().includes(search.toLowerCase());
     return matchFilter && matchSearch;
   });
 
@@ -75,7 +117,12 @@ export default function FindScreen() {
 
       <ScrollView style={styles.list} showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 100 }}>
-        {filtered.length === 0 ? (
+        {loading ? (
+          <View style={styles.emptyBox}>
+            <ActivityIndicator size="large" color="#1A56DB" />
+            <Text style={[styles.emptyText, { marginTop: 12 }]}>Loading rides...</Text>
+          </View>
+        ) : filtered.length === 0 ? (
           <View style={styles.emptyBox}>
             <Text style={styles.emptyIcon}>🚫</Text>
             <Text style={styles.emptyText}>No rides found</Text>
@@ -86,15 +133,17 @@ export default function FindScreen() {
         ) : (
           filtered.map(ride => (
             <View key={ride.id} style={styles.rideCard}>
-              <View style={[styles.cardAccent, { backgroundColor: ride.color }]} />
+              <View style={[styles.cardAccent, { backgroundColor: ride.color || '#1A56DB' }]} />
               <View style={styles.cardTop}>
                 <View style={styles.hostRow}>
-                  <View style={[styles.hostAvatar, { backgroundColor: ride.color + '22' }]}>
-                    <Text style={[styles.hostAvatarText, { color: ride.color }]}>{ride.avatar}</Text>
+                  <View style={[styles.hostAvatar, { backgroundColor: (ride.color || '#1A56DB') + '22' }]}>
+                    <Text style={[styles.hostAvatarText, { color: ride.color || '#1A56DB' }]}>
+                      {ride.avatar || ride.hostName?.charAt(0) || '?'}
+                    </Text>
                   </View>
                   <View>
-                    <Text style={styles.hostName}>{ride.host}</Text>
-                    <Text style={styles.hostDept}>{ride.dept}</Text>
+                    <Text style={styles.hostName}>{ride.hostName}</Text>
+                    <Text style={styles.hostDept}>{ride.dept || 'Student'}</Text>
                   </View>
                 </View>
                 <View>
@@ -109,7 +158,7 @@ export default function FindScreen() {
                 </View>
                 <View style={styles.routeLine} />
                 <View style={styles.routeRow}>
-                  <View style={[styles.routeDot, { backgroundColor: ride.color }]} />
+                  <View style={[styles.routeDot, { backgroundColor: ride.color || '#1A56DB' }]} />
                   <Text style={styles.routeText}>{ride.to}</Text>
                 </View>
                 <Text style={styles.distanceText}>{ride.distance}</Text>
@@ -117,24 +166,33 @@ export default function FindScreen() {
               <View style={styles.cardBottom}>
                 <View style={styles.chipsRow}>
                   <View style={styles.chip}>
-                    <Text style={styles.chipText}>{ride.type === 'car' ? '🚗' : '🏍'} {ride.vehicle}</Text>
+                    <Text style={styles.chipText}>{ride.vehicleType === 'car' ? '🚗' : '🏍'} {ride.vehicleModel}</Text>
                   </View>
-                  <View style={[styles.chip, { backgroundColor: ride.color + '15' }]}>
-                    <Text style={[styles.chipText, { color: ride.color }]}>{ride.seats} seat{ride.seats > 1 ? 's' : ''}</Text>
+                  <View style={[styles.chip, { backgroundColor: (ride.color || '#1A56DB') + '15' }]}>
+                    <Text style={[styles.chipText, { color: ride.color || '#1A56DB' }]}>{ride.seats} seat{ride.seats > 1 ? 's' : ''}</Text>
                   </View>
                   <View style={[styles.chip, { backgroundColor: '#16A34A15' }]}>
-                    <Text style={[styles.chipText, { color: '#16A34A' }]}>⛽ {ride.fuel}</Text>
+                    <Text style={[styles.chipText, { color: '#16A34A' }]}>⛽ ₹{ride.fuel}</Text>
                   </View>
                 </View>
-                <TouchableOpacity
-                  style={[styles.reqBtn, requested[ride.id] && styles.reqBtnDone]}
-                  onPress={() => setRequested(r => ({ ...r, [ride.id]: true }))}
-                  disabled={!!requested[ride.id]}
-                >
-                  <Text style={[styles.reqBtnText, requested[ride.id] && styles.reqBtnTextDone]}>
-                    {requested[ride.id] ? '✓ Sent' : 'Request'}
-                  </Text>
-                </TouchableOpacity>
+                {ride.hostId === currentUser?.uid ? (
+                  <View style={[styles.reqBtn, styles.reqBtnDone]}>
+                    <Text style={[styles.reqBtnText, styles.reqBtnTextDone]}>Your ride</Text>
+                  </View>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.reqBtn, requestStatus[ride.id] && styles.reqBtnDone]}
+                    onPress={() => handleRequest(ride)}
+                    disabled={!!requestStatus[ride.id]}
+                  >
+                    <Text style={[styles.reqBtnText, requestStatus[ride.id] && styles.reqBtnTextDone]}>
+                      {requestStatus[ride.id] === 'accepted' ? '✓ Accepted'
+                        : requestStatus[ride.id] === 'pending' ? '✓ Sent'
+                        : requestStatus[ride.id] === 'rejected' ? 'Declined'
+                        : 'Request'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           ))

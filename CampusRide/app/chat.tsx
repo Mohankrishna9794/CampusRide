@@ -1,46 +1,83 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView,
-  TouchableOpacity, TextInput,
+  TouchableOpacity, TextInput, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-
-const chats = [
-  { id:'1', name:'Arjun M.', avatar:'A', role:'Ride Host', msg:'Sure! I will pick you up at Adyar signal 👍', time:'8:12 AM', unread:2, color:'#1A56DB' },
-  { id:'2', name:'Priya S.', avatar:'P', role:'Ride Host', msg:'I have 3 seats free today, want to join?', time:'Yesterday', unread:0, color:'#2563EB' },
-  { id:'3', name:'Rahul K.', avatar:'R', role:'Ride Host', msg:'Ride confirmed for tomorrow 7:55 AM ✅', time:'Mon', unread:0, color:'#1D4ED8' },
-  { id:'4', name:'Sneha T.', avatar:'S', role:'Ride Host', msg:'Thanks for the ride request!', time:'Sun', unread:1, color:'#16A34A' },
-];
-
-const mockMessages: {[key:string]: {id:string, text:string, mine:boolean, time:string}[]} = {
-  '1': [
-    { id:'1', text:'Hi! I saw your ride posting from Adyar Signal', mine:true, time:'8:05 AM' },
-    { id:'2', text:'Can I join your ride today?', mine:true, time:'8:06 AM' },
-    { id:'3', text:'Sure! I will pick you up at Adyar signal 👍', mine:false, time:'8:12 AM' },
-    { id:'4', text:'Be there by 8:10 AM', mine:false, time:'8:12 AM' },
-    { id:'5', text:'Perfect! Thank you so much 🙏', mine:true, time:'8:13 AM' },
-  ],
-};
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './firebase';
+import { colorFor, initialOf } from '../constants/avatars';
+import { listenChats, listenMessages, sendChatMessage } from '@/lib/rideService';
 
 export default function ChatScreen() {
   const router = useRouter();
-  const [activeChat, setActiveChat] = useState<string | null>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [chats, setChats] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeChat, setActiveChat] = useState<any | null>(null);
+  const [messages, setMessages] = useState<any[]>([]);
   const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState(mockMessages);
+  const [sending, setSending] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
 
-  const sendMessage = () => {
-    if (!message.trim() || !activeChat) return;
-    const newMsg = { id: Date.now().toString(), text: message, mine: true, time: 'Now' };
-    setMessages(prev => ({
-      ...prev,
-      [activeChat]: [...(prev[activeChat] || []), newMsg]
-    }));
-    setMessage('');
+  // Auth
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setCurrentUser(u));
+    return () => unsub();
+  }, []);
+
+  // My conversations (chats are created only when a ride request is accepted)
+  useEffect(() => {
+    if (!currentUser) { setChats([]); setLoading(false); return; }
+    const unsub = listenChats(currentUser.uid, (data) => {
+      setChats(data);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, [currentUser]);
+
+  // Live messages for the open conversation
+  useEffect(() => {
+    if (!activeChat) { setMessages([]); return; }
+    const unsub = listenMessages(activeChat.id, (msgs) => {
+      setMessages(msgs);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+    });
+    return () => unsub();
+  }, [activeChat]);
+
+  const otherInfo = (chat: any) => {
+    const otherId = (chat.participants || []).find((p: string) => p !== currentUser?.uid);
+    const info = chat.participantInfo?.[otherId] || {};
+    return { id: otherId, name: info.name || 'Student' };
   };
 
+  const sendMessage = async () => {
+    if (!message.trim() || !activeChat || !currentUser) return;
+    const text = message.trim();
+    setMessage('');
+    setSending(true);
+    try {
+      await sendChatMessage(activeChat.id, currentUser.uid, text);
+    } catch (e) {
+      console.log('send error', e);
+      setMessage(text); // restore on failure
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const fmtTime = (iso?: string) => {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch { return ''; }
+  };
+
+  // ---- Conversation view ----
   if (activeChat) {
-    const chat = chats.find(c => c.id === activeChat)!;
-    const msgs = messages[activeChat] || [];
+    const other = otherInfo(activeChat);
+    const c = colorFor(other.id);
     return (
       <View style={styles.container}>
         <View style={styles.chatHeader}>
@@ -48,26 +85,35 @@ export default function ChatScreen() {
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
           <View style={styles.chatHeaderInfo}>
-            <View style={[styles.chatHeaderAvatar, { backgroundColor: chat.color + '33' }]}>
-              <Text style={[styles.chatHeaderAvatarText, { color: chat.color }]}>{chat.avatar}</Text>
+            <View style={[styles.chatHeaderAvatar, { backgroundColor: c + '33' }]}>
+              <Text style={[styles.chatHeaderAvatarText, { color: c }]}>{initialOf(other.name)}</Text>
             </View>
             <View>
-              <Text style={styles.chatHeaderName}>{chat.name}</Text>
-              <Text style={styles.chatHeaderRole}>{chat.role}</Text>
+              <Text style={styles.chatHeaderName}>{other.name}</Text>
+              <Text style={styles.chatHeaderRole}>{activeChat.rideFrom} → {activeChat.rideTo}</Text>
             </View>
           </View>
         </View>
 
-        <ScrollView style={styles.msgList} contentContainerStyle={{ padding: 16, paddingBottom: 20 }}>
-          <View style={styles.dateBadge}><Text style={styles.dateBadgeText}>Today</Text></View>
-          {msgs.map(msg => (
-            <View key={msg.id} style={[styles.msgRow, msg.mine && styles.msgRowMine]}>
-              <View style={[styles.msgBubble, msg.mine ? styles.msgBubbleMine : styles.msgBubbleOther]}>
-                <Text style={[styles.msgText, msg.mine && styles.msgTextMine]}>{msg.text}</Text>
-                <Text style={[styles.msgTime, msg.mine && styles.msgTimeMine]}>{msg.time}</Text>
+        <ScrollView
+          ref={scrollRef}
+          style={styles.msgList}
+          contentContainerStyle={{ padding: 16, paddingBottom: 20 }}
+          onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+        >
+          {messages.length === 0 ? (
+            <View style={styles.dateBadge}><Text style={styles.dateBadgeText}>Say hello 👋</Text></View>
+          ) : messages.map(msg => {
+            const mine = msg.senderId === currentUser?.uid;
+            return (
+              <View key={msg.id} style={[styles.msgRow, mine && styles.msgRowMine]}>
+                <View style={[styles.msgBubble, mine ? styles.msgBubbleMine : styles.msgBubbleOther]}>
+                  <Text style={[styles.msgText, mine && styles.msgTextMine]}>{msg.text}</Text>
+                  <Text style={[styles.msgTime, mine && styles.msgTimeMine]}>{fmtTime(msg.createdAt)}</Text>
+                </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
         </ScrollView>
 
         <View style={styles.msgInputRow}>
@@ -81,7 +127,7 @@ export default function ChatScreen() {
               multiline
             />
           </View>
-          <TouchableOpacity style={styles.sendBtn} onPress={sendMessage}>
+          <TouchableOpacity style={styles.sendBtn} onPress={sendMessage} disabled={sending}>
             <Text style={styles.sendBtnText}>➤</Text>
           </TouchableOpacity>
         </View>
@@ -89,6 +135,7 @@ export default function ChatScreen() {
     );
   }
 
+  // ---- Conversation list ----
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -100,30 +147,38 @@ export default function ChatScreen() {
       </View>
 
       <ScrollView style={styles.list} contentContainerStyle={{ padding: 16, paddingBottom: 100 }}>
-        {chats.map(chat => (
-          <TouchableOpacity
-            key={chat.id}
-            style={styles.chatItem}
-            onPress={() => setActiveChat(chat.id)}
-          >
-            <View style={[styles.chatAvatar, { backgroundColor: chat.color + '22' }]}>
-              <Text style={[styles.chatAvatarText, { color: chat.color }]}>{chat.avatar}</Text>
-            </View>
-            <View style={styles.chatInfo}>
-              <View style={styles.chatInfoTop}>
-                <Text style={styles.chatName}>{chat.name}</Text>
-                <Text style={styles.chatTime}>{chat.time}</Text>
+        {loading ? (
+          <View style={styles.emptyBox}><ActivityIndicator size="large" color="#1A56DB" /></View>
+        ) : chats.length === 0 ? (
+          <View style={styles.emptyBox}>
+            <Text style={styles.emptyIcon}>💬</Text>
+            <Text style={styles.emptyText}>No chats yet</Text>
+            <Text style={styles.emptySub}>
+              Chats open once a ride request is accepted.{'\n'}Request a ride or accept one to start talking.
+            </Text>
+            <TouchableOpacity onPress={() => router.push('/requests' as any)}>
+              <Text style={styles.emptyLink}>View ride requests →</Text>
+            </TouchableOpacity>
+          </View>
+        ) : chats.map(chat => {
+          const other = otherInfo(chat);
+          const c = colorFor(other.id);
+          return (
+            <TouchableOpacity key={chat.id} style={styles.chatItem} onPress={() => setActiveChat(chat)}>
+              <View style={[styles.chatAvatar, { backgroundColor: c + '22' }]}>
+                <Text style={[styles.chatAvatarText, { color: c }]}>{initialOf(other.name)}</Text>
               </View>
-              <Text style={styles.chatRole}>{chat.role}</Text>
-              <Text style={styles.chatMsg} numberOfLines={1}>{chat.msg}</Text>
-            </View>
-            {chat.unread > 0 && (
-              <View style={styles.unreadBadge}>
-                <Text style={styles.unreadText}>{chat.unread}</Text>
+              <View style={styles.chatInfo}>
+                <View style={styles.chatInfoTop}>
+                  <Text style={styles.chatName}>{other.name}</Text>
+                  <Text style={styles.chatTime}>{fmtTime(chat.lastMessageAt)}</Text>
+                </View>
+                <Text style={styles.chatRole}>{chat.rideFrom} → {chat.rideTo}</Text>
+                <Text style={styles.chatMsg} numberOfLines={1}>{chat.lastMessage}</Text>
               </View>
-            )}
-          </TouchableOpacity>
-        ))}
+            </TouchableOpacity>
+          );
+        })}
       </ScrollView>
 
       <View style={styles.bottomNav}>
@@ -151,6 +206,11 @@ const styles = StyleSheet.create({
   backText: { fontSize: 13, color: '#ffffff', fontWeight: '700' },
   headerTitle: { fontSize: 18, fontWeight: '900', color: '#ffffff' },
   list: { flex: 1 },
+  emptyBox: { alignItems: 'center', padding: 44, backgroundColor: '#ffffff', borderRadius: 18, marginTop: 12 },
+  emptyIcon: { fontSize: 44, marginBottom: 12 },
+  emptyText: { fontSize: 15, color: '#0A0F2E', fontWeight: '700', marginBottom: 8 },
+  emptySub: { fontSize: 12, color: '#888', textAlign: 'center', lineHeight: 18, marginBottom: 14 },
+  emptyLink: { fontSize: 14, color: '#1A56DB', fontWeight: '800' },
   chatItem: { backgroundColor: '#ffffff', borderRadius: 16, padding: 14, marginBottom: 10, flexDirection: 'row', alignItems: 'center', gap: 12, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 },
   chatAvatar: { width: 46, height: 46, borderRadius: 23, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   chatAvatarText: { fontSize: 17, fontWeight: '800' },
@@ -160,8 +220,6 @@ const styles = StyleSheet.create({
   chatTime: { fontSize: 10, color: '#bbb', fontWeight: '600' },
   chatRole: { fontSize: 10, color: '#1A56DB', fontWeight: '600', marginBottom: 2 },
   chatMsg: { fontSize: 12, color: '#888', fontWeight: '400' },
-  unreadBadge: { backgroundColor: '#1A56DB', borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' },
-  unreadText: { fontSize: 10, fontWeight: '800', color: '#ffffff' },
   chatHeader: { backgroundColor: '#1A56DB', paddingTop: 52, paddingBottom: 16, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', gap: 14, borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
   chatHeaderInfo: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   chatHeaderAvatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center' },

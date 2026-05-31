@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, setPersistence, browserLocalPersistence } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { Platform } from 'react-native';
 
 const firebaseConfig = {
   apiKey: "AIzaSyASHFY7d7Pk28CuEOcfHwft1o5PUdZXjH4",
@@ -14,5 +15,14 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+
+// Keep the user logged in across refreshes (web stores the session in
+// IndexedDB/localStorage — the "cookie" that survives a reload).
+if (Platform.OS === 'web') {
+  setPersistence(auth, browserLocalPersistence).catch((e) =>
+    console.log('persistence error', e)
+  );
+}
+
 export const db = getFirestore(app);
 export default app;

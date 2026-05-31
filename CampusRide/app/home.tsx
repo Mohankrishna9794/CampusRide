@@ -5,7 +5,11 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { db } from './firebase';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth, db } from './firebase';
+import {
+  sendRideRequest, listenSentRequests, listenPendingCount,
+} from '@/lib/rideService';
 
 const { width } = Dimensions.get('window');
 
@@ -29,9 +33,35 @@ export default function HomeScreen() {
   const [activeInput, setActiveInput] = useState<'pickup' | 'drop' | null>(null);
   const [searched, setSearched] = useState(false);
   const [filter, setFilter] = useState('all');
-  const [requested, setRequested] = useState<{ [key: string]: boolean }>({});
+  const [requestStatus, setRequestStatus] = useState<{ [key: string]: string }>({});
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('home');
   const [detectingLocation, setDetectingLocation] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  // Track auth, then the current user's request state
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => setCurrentUser(u));
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!currentUser) { setPendingCount(0); setRequestStatus({}); return; }
+    const unsubPending = listenPendingCount(currentUser.uid, setPendingCount);
+    const unsubSent = listenSentRequests(currentUser.uid, (map) => setRequestStatus(map));
+    return () => { unsubPending(); unsubSent(); };
+  }, [currentUser]);
+
+  const handleRequest = async (ride: any) => {
+    if (!currentUser) { router.push('/login' as any); return; }
+    if (ride.hostId === currentUser.uid) return; // can't request your own ride
+    try {
+      await sendRideRequest(ride);
+      setRequestStatus(s => ({ ...s, [ride.id]: 'pending' }));
+    } catch (e) {
+      console.log('request error', e);
+    }
+  };
 
   // Load rides from Firestore in real time
   useEffect(() => {
@@ -121,12 +151,25 @@ export default function HomeScreen() {
           <Text style={styles.greeting}>Good Morning 👋</Text>
           <Text style={styles.headerTitle}>Where are you going?</Text>
         </View>
-        <TouchableOpacity
-          style={styles.avatarBtn}
-          onPress={() => router.push('/profile' as any)}
-        >
-          <Text style={styles.avatarText}>ME</Text>
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <TouchableOpacity
+            style={styles.bellBtn}
+            onPress={() => router.push('/requests' as any)}
+          >
+            <Text style={styles.bellIcon}>🔔</Text>
+            {pendingCount > 0 && (
+              <View style={styles.bellBadge}>
+                <Text style={styles.bellBadgeText}>{pendingCount > 9 ? '9+' : pendingCount}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.avatarBtn}
+            onPress={() => router.push('/profile' as any)}
+          >
+            <Text style={styles.avatarText}>ME</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -395,16 +438,24 @@ export default function HomeScreen() {
                       </Text>
                     </View>
                   </View>
-                  <TouchableOpacity
-                    style={[styles.reqBtn, requested[ride.id] && styles.reqBtnDone]}
-                    onPress={() => setRequested(r => ({ ...r, [ride.id]: true }))}
-                    disabled={!!requested[ride.id]}
-                  >
-                    <Text style={[styles.reqBtnText,
-                      requested[ride.id] && styles.reqBtnTextDone]}>
-                      {requested[ride.id] ? '✓ Sent' : 'Request'}
-                    </Text>
-                  </TouchableOpacity>
+                  {ride.hostId === currentUser?.uid ? (
+                    <View style={[styles.reqBtn, styles.reqBtnDone]}>
+                      <Text style={[styles.reqBtnText, styles.reqBtnTextDone]}>Your ride</Text>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.reqBtn, requestStatus[ride.id] && styles.reqBtnDone]}
+                      onPress={() => handleRequest(ride)}
+                      disabled={!!requestStatus[ride.id]}
+                    >
+                      <Text style={[styles.reqBtnText, requestStatus[ride.id] && styles.reqBtnTextDone]}>
+                        {requestStatus[ride.id] === 'accepted' ? '✓ Accepted'
+                          : requestStatus[ride.id] === 'pending' ? '✓ Sent'
+                          : requestStatus[ride.id] === 'rejected' ? 'Declined'
+                          : 'Request'}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
             ))
@@ -456,6 +507,18 @@ const styles = StyleSheet.create({
     borderColor: '#ffffff40', alignItems: 'center', justifyContent: 'center',
   },
   avatarText: { fontSize: 13, color: '#ffffff', fontWeight: '800' },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  bellBtn: {
+    width: 42, height: 42, borderRadius: 21, backgroundColor: '#ffffff20',
+    borderWidth: 2, borderColor: '#ffffff40', alignItems: 'center', justifyContent: 'center',
+  },
+  bellIcon: { fontSize: 18 },
+  bellBadge: {
+    position: 'absolute', top: -4, right: -4, minWidth: 20, height: 20, borderRadius: 10,
+    backgroundColor: '#EF4444', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 5, borderWidth: 2, borderColor: '#1A56DB',
+  },
+  bellBadgeText: { fontSize: 10, color: '#ffffff', fontWeight: '800' },
   locationCard: {
     backgroundColor: '#ffffff', borderRadius: 20, margin: 16, padding: 18,
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 },

@@ -8,6 +8,8 @@ import {
   Dimensions,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../firebase';
 
 const { height } = Dimensions.get('window');
 
@@ -63,10 +65,29 @@ export default function SplashScreen() {
       ])
     ).start();
 
-    const timer = setTimeout(() => {
-      router.replace('/onboarding' as any);
-    }, 3500);
-    return () => clearTimeout(timer);
+    // Route based on the restored session: logged-in users skip onboarding/login.
+    // We wait for BOTH the splash animation (min 3.5s) AND Firebase to resolve
+    // the persisted session before navigating.
+    let didNavigate = false;
+    let authReady = false;
+    let isAuthed = false;
+    let minTimePassed = false;
+
+    const go = () => {
+      if (didNavigate || !authReady || !minTimePassed) return;
+      didNavigate = true;
+      router.replace((isAuthed ? '/home' : '/onboarding') as any);
+    };
+
+    const unsubAuth = onAuthStateChanged(auth, (user) => {
+      authReady = true;
+      isAuthed = !!user;
+      go();
+    });
+
+    const timer = setTimeout(() => { minTimePassed = true; go(); }, 3500);
+
+    return () => { clearTimeout(timer); unsubAuth(); };
   }, []);
 
   return (
