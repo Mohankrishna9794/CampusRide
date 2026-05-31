@@ -110,7 +110,10 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity style={styles.forgotRow}>
+          <TouchableOpacity
+            style={styles.forgotRow}
+            onPress={() => router.push('/forgot-password' as any)}
+          >
             <Text style={styles.forgotText}>Forgot Password?</Text>
           </TouchableOpacity>
 
@@ -127,17 +130,6 @@ export default function LoginScreen() {
               </Text>
             </TouchableOpacity>
           </Animated.View>
-
-          <View style={styles.dividerRow}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>OR</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <TouchableOpacity style={styles.googleBtn}>
-            <Text style={styles.googleIcon}>🔵</Text>
-            <Text style={styles.googleText}>Continue with Google</Text>
-          </TouchableOpacity>
 
           <TouchableOpacity
             style={styles.registerRow}
