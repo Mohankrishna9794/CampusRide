@@ -1,14 +1,12 @@
 import { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TextInput,
-  TouchableOpacity, Dimensions, Animated,
+  TouchableOpacity, Animated,
   KeyboardAvoidingView, Platform, ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from './firebase';
-
-const { width } = Dimensions.get('window');
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -136,7 +134,7 @@ export default function LoginScreen() {
             onPress={() => router.push('/register' as any)}
           >
             <Text style={styles.registerText}>
-              Don't have an account?{' '}
+              Don&apos;t have an account?{' '}
               <Text style={styles.registerLink}>Register Now</Text>
             </Text>
           </TouchableOpacity>
@@ -193,16 +191,6 @@ const styles = StyleSheet.create({
   },
   loginBtnLoading: { backgroundColor: '#1A56DB99' },
   loginBtnText: { fontSize: 16, fontWeight: '800', color: '#ffffff' },
-  dividerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, gap: 12 },
-  dividerLine: { flex: 1, height: 1, backgroundColor: '#E8EEFF' },
-  dividerText: { fontSize: 12, color: '#aaa', fontWeight: '600' },
-  googleBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    borderWidth: 1.5, borderColor: '#E8EEFF', borderRadius: 16,
-    paddingVertical: 16, marginBottom: 28, gap: 10, backgroundColor: '#F8F9FF',
-  },
-  googleIcon: { fontSize: 20 },
-  googleText: { fontSize: 15, fontWeight: '700', color: '#0A0F2E' },
   registerRow: { alignItems: 'center' },
   registerText: { fontSize: 14, color: '#888', fontWeight: '500' },
   registerLink: { color: '#1A56DB', fontWeight: '800' },

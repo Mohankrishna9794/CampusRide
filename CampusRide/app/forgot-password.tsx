@@ -25,15 +25,27 @@ export default function ForgotPasswordScreen() {
       await sendPasswordResetEmail(auth, email.trim());
       setSentTo(email.trim());
     } catch (err: any) {
-      // For security we don't reveal whether an account exists — show the same success-ish message
-      // except for clearly malformed input.
-      if (err.code === 'auth/invalid-email') {
-        setError('That email address looks invalid');
-      } else if (err.code === 'auth/missing-email') {
-        setError('Please enter your email');
-      } else {
-        // user-not-found / too-many-requests etc. — still show the sent screen to avoid leaking accounts
-        setSentTo(email.trim());
+      // Anti-enumeration: we must NOT reveal whether an account exists, so
+      // `auth/user-not-found` is treated as success. But we must NOT lie about
+      // genuine delivery failures (no network / rate limited) — otherwise the
+      // user waits forever for an email that was never sent.
+      switch (err?.code) {
+        case 'auth/invalid-email':
+          setError('That email address looks invalid');
+          break;
+        case 'auth/missing-email':
+          setError('Please enter your email');
+          break;
+        case 'auth/network-request-failed':
+          setError('Network error. Check your connection and try again');
+          break;
+        case 'auth/too-many-requests':
+          setError('Too many attempts. Please wait a few minutes and try again');
+          break;
+        default:
+          // user-not-found (and any other non-actionable case) → show the sent
+          // screen so we never leak which emails are registered.
+          setSentTo(email.trim());
       }
     } finally {
       setLoading(false);
